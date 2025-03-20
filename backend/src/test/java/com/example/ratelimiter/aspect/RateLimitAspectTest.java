@@ -41,6 +41,8 @@ class RateLimitAspectTest {
     @Test
     void whenRateLimitAllowed_shouldProceed() throws Throwable {
         // Given
+        ProceedingJoinPoint joinPoint = mock(ProceedingJoinPoint.class);
+        when(joinPoint.proceed()).thenReturn("success");
         when(rateLimit.key()).thenReturn("X-User-Id");
         when(rateLimit.type()).thenReturn("second");
         when(rateLimit.limit()).thenReturn(5);
@@ -48,10 +50,11 @@ class RateLimitAspectTest {
         when(rateLimiterService.isAllowed(anyString(), anyString(), anyInt())).thenReturn(true);
 
         // When
-        Object result = aspect.checkRateLimit(mock(ProceedingJoinPoint.class), rateLimit);
+        Object result = aspect.checkRateLimit(joinPoint, rateLimit);
 
         // Then
         assertNotNull(result);
+        assertEquals("success", result);
         verify(rateLimiterService).isAllowed("user123", "second", 5);
     }
 

@@ -43,7 +43,6 @@ class RateLimiterServiceTest {
     void whenFirstRequest_shouldAllow() {
         // Given
         String key = "test-key";
-        when(valueOperations.increment(anyString())).thenReturn(1L);
 
         // When
         boolean result = rateLimiterService.isAllowed(key, "second", 0);
