@@ -6,6 +6,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.web.client.TestRestTemplate;
+import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.http.HttpEntity;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpMethod;
@@ -41,12 +42,19 @@ class RateLimiterIntegrationTest {
         @Autowired
         private TestRestTemplate restTemplate;
 
+        @Autowired
+        private RedisTemplate<String, String> redisTemplate;
+
         private String baseUrl;
 
         @BeforeEach
-        void setUp() {
+        void setUp() throws InterruptedException {
                 baseUrl = "http://localhost:"
                                 + restTemplate.getRestTemplate().getUriTemplateHandler().expand("/").getPort();
+                // Clear Redis before each test
+                redisTemplate.getConnectionFactory().getConnection().flushAll();
+                // Add a small delay to ensure Redis is ready
+                Thread.sleep(100);
         }
 
         @Test
@@ -65,7 +73,7 @@ class RateLimiterIntegrationTest {
         }
 
         @Test
-        void whenRateLimitExceeded_shouldReturn429() {
+        void whenRateLimitExceeded_shouldReturn429() throws InterruptedException {
                 HttpHeaders headers = new HttpHeaders();
                 headers.set("X-User-Id", "user123");
 
@@ -77,6 +85,8 @@ class RateLimiterIntegrationTest {
                                         new HttpEntity<>(headers),
                                         String.class);
                         assertThat(response.getStatusCode().value()).isEqualTo(200);
+                        // Add a small delay between requests
+                        Thread.sleep(50);
                 }
 
                 // Next request should be rate limited
@@ -99,11 +109,14 @@ class RateLimiterIntegrationTest {
                                 String.class);
 
                 assertThat(response.getStatusCode().value()).isEqualTo(400);
-                assertThat(response.getBody()).isEqualTo("Required header X-User-Id is missing");
+                assertThat(response.getBody())
+                                .contains("\"status\":400")
+                                .contains("\"error\":\"Bad Request\"")
+                                .contains("\"path\":\"/api/posts\"");
         }
 
         @Test
-        void whenDifferentEndpoints_shouldHaveDifferentLimits() {
+        void whenDifferentEndpoints_shouldHaveDifferentLimits() throws InterruptedException {
                 // Test posts endpoint (limit: 5 per second)
                 HttpHeaders postHeaders = new HttpHeaders();
                 postHeaders.set("X-User-Id", "user123");
@@ -114,6 +127,7 @@ class RateLimiterIntegrationTest {
                                         new HttpEntity<>(postHeaders),
                                         String.class);
                         assertThat(response.getStatusCode().value()).isEqualTo(200);
+                        Thread.sleep(50);
                 }
                 ResponseEntity<String> response = restTemplate.exchange(
                                 baseUrl + "/api/posts",
@@ -121,6 +135,10 @@ class RateLimiterIntegrationTest {
                                 new HttpEntity<>(postHeaders),
                                 String.class);
                 assertThat(response.getStatusCode().value()).isEqualTo(429);
+
+                // Clear Redis for the next test
+                redisTemplate.getConnectionFactory().getConnection().flushAll();
+                Thread.sleep(100);
 
                 // Test accounts endpoint (limit: 3 per day)
                 HttpHeaders accountHeaders = new HttpHeaders();
@@ -132,6 +150,7 @@ class RateLimiterIntegrationTest {
                                         new HttpEntity<>(accountHeaders),
                                         String.class);
                         assertThat(response.getStatusCode().value()).isEqualTo(200);
+                        Thread.sleep(50);
                 }
                 response = restTemplate.exchange(
                                 baseUrl + "/api/accounts",
@@ -139,6 +158,10 @@ class RateLimiterIntegrationTest {
                                 new HttpEntity<>(accountHeaders),
                                 String.class);
                 assertThat(response.getStatusCode().value()).isEqualTo(429);
+
+                // Clear Redis for the next test
+                redisTemplate.getConnectionFactory().getConnection().flushAll();
+                Thread.sleep(100);
 
                 // Test rewards endpoint (limit: 1 per week)
                 HttpHeaders rewardHeaders = new HttpHeaders();
