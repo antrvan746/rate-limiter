@@ -9,7 +9,9 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.data.redis.core.ValueOperations;
 
-import static org.assertj.core.api.Assertions.assertThat;
+import java.time.Duration;
+
+import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.*;
@@ -29,60 +31,78 @@ class RateLimiterServiceTest {
     @BeforeEach
     void setUp() {
         config = new RateLimiterConfig();
+        config.setMaxRequestsPerSecond(2);
+        config.setMaxRequestsPerDay(10);
+        config.setMaxRequestsPerWeek(5);
+
         when(redisTemplate.opsForValue()).thenReturn(valueOperations);
         rateLimiterService = new RateLimiterService(redisTemplate, config);
     }
 
     @Test
-    void shouldAllowFirstRequest() {
+    void whenFirstRequest_shouldAllow() {
         // Given
+        String key = "test-key";
+        when(valueOperations.get(anyString())).thenReturn(null);
         when(valueOperations.increment(anyString())).thenReturn(1L);
 
         // When
-        boolean result = rateLimiterService.isAllowed("test-key", "second");
+        boolean result = rateLimiterService.isAllowed(key, "second", 0);
 
         // Then
-        assertThat(result).isTrue();
-        verify(redisTemplate).expire(anyString(), any());
+        assertTrue(result);
+        verify(valueOperations).set(anyString(), eq("1"), any(Duration.class));
     }
 
     @Test
-    void shouldBlockWhenLimitExceeded() {
+    void whenUnderLimit_shouldAllow() {
         // Given
-        when(valueOperations.increment(anyString())).thenReturn(3L);
+        String key = "test-key";
+        when(valueOperations.get(anyString())).thenReturn("1");
+        when(valueOperations.increment(anyString())).thenReturn(2L);
 
         // When
-        boolean result = rateLimiterService.isAllowed("test-key", "second");
+        boolean result = rateLimiterService.isAllowed(key, "second", 3);
 
         // Then
-        assertThat(result).isFalse();
+        assertTrue(result);
+        verify(valueOperations).increment(anyString());
     }
 
     @Test
-    void shouldHandleDifferentTimeWindows() {
+    void whenAtLimit_shouldNotAllow() {
         // Given
-        when(valueOperations.increment(anyString())).thenReturn(1L);
+        String key = "test-key";
+        when(valueOperations.get(anyString())).thenReturn("3");
 
         // When
-        boolean resultSecond = rateLimiterService.isAllowed("test-key", "second");
-        boolean resultDay = rateLimiterService.isAllowed("test-key", "day");
-        boolean resultWeek = rateLimiterService.isAllowed("test-key", "week");
+        boolean result = rateLimiterService.isAllowed(key, "second", 3);
 
         // Then
-        assertThat(resultSecond).isTrue();
-        assertThat(resultDay).isTrue();
-        assertThat(resultWeek).isTrue();
+        assertFalse(result);
+        verify(valueOperations, never()).increment(anyString());
     }
 
     @Test
-    void shouldUseCorrectRedisKey() {
+    void whenCustomLimitProvided_shouldUseCustomLimit() {
         // Given
-        when(valueOperations.increment(anyString())).thenReturn(1L);
+        String key = "test-key";
+        when(valueOperations.get(anyString())).thenReturn("4");
 
         // When
-        rateLimiterService.isAllowed("test-key", "second");
+        boolean result = rateLimiterService.isAllowed(key, "second", 5);
 
         // Then
-        verify(valueOperations).increment("rate-limit:second:test-key");
+        assertTrue(result);
+        verify(valueOperations).increment(anyString());
+    }
+
+    @Test
+    void whenInvalidType_shouldThrowException() {
+        // Given
+        String key = "test-key";
+
+        // When/Then
+        assertThrows(IllegalArgumentException.class, () -> rateLimiterService.isAllowed(key, "invalid", 0));
     }
 }

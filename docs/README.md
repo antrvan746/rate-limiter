@@ -1,5 +1,28 @@
 # Rate Limiter Documentation
 
+Welcome to the Rate Limiter documentation. This documentation will guide you through the implementation, configuration, and usage of the Rate Limiter service.
+
+## Table of Contents
+
+1. [Getting Started](getting-started.md)
+2. [Architecture](architecture.md)
+3. [Configuration](configuration.md)
+4. [Usage Guide](usage-guide.md)
+5. [API Reference](api-reference.md)
+6. [Testing](testing.md)
+7. [Best Practices](best-practices.md)
+8. [Examples](examples.md)
+9. [Contributing](contributing.md)
+
+## Quick Start
+
+1. Add the rate limiter dependency to your project
+2. Configure Redis connection
+3. Add rate limit annotations to your endpoints
+4. Start using the rate limiter
+
+For detailed instructions, see the [Getting Started](getting-started.md) guide.
+
 This project implements a rate limiter using Spring Boot and Redis. It provides three different rate limiting scenarios:
 
 1. Maximum 2 posts per second per user

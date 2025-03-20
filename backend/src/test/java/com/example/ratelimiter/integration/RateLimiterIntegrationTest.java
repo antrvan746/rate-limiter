@@ -1,7 +1,7 @@
 package com.example.ratelimiter.integration;
 
-import com.example.ratelimiter.RateLimiterApplication;
-import com.example.ratelimiter.service.RateLimiterService;
+import org.junit.jupiter.api.AfterAll;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -9,7 +9,6 @@ import org.springframework.boot.test.web.client.TestRestTemplate;
 import org.springframework.http.HttpEntity;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpMethod;
-import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
@@ -20,116 +19,141 @@ import org.testcontainers.utility.DockerImageName;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-@SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT, classes = RateLimiterApplication.class)
+@SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 @Testcontainers
 class RateLimiterIntegrationTest {
 
-    @Container
-    static GenericContainer<?> redis = new GenericContainer<>(DockerImageName.parse("redis:7-alpine"))
-            .withExposedPorts(6379);
+        @Container
+        static GenericContainer<?> redis = new GenericContainer<>(DockerImageName.parse("redis:7.2"))
+                        .withExposedPorts(6379);
 
-    @DynamicPropertySource
-    static void redisProperties(DynamicPropertyRegistry registry) {
-        registry.add("spring.data.redis.host", redis::getHost);
-        registry.add("spring.data.redis.port", redis::getFirstMappedPort);
-    }
-
-    @Autowired
-    private TestRestTemplate restTemplate;
-
-    @Autowired
-    private RateLimiterService rateLimiterService;
-
-    @Test
-    void shouldEnforceRateLimits() {
-        // Test post creation rate limit
-        String userId = "test-user-1";
-        HttpHeaders headers = new HttpHeaders();
-        headers.set("X-User-Id", userId);
-        HttpEntity<String> entity = new HttpEntity<>(null, headers);
-
-        for (int i = 0; i < 2; i++) {
-            ResponseEntity<String> response = restTemplate.exchange(
-                    "/api/posts",
-                    HttpMethod.POST,
-                    entity,
-                    String.class);
-            assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+        @AfterAll
+        static void tearDown() {
+                redis.close();
         }
 
-        // This request should be blocked
-        ResponseEntity<String> blockedResponse = restTemplate.exchange(
-                "/api/posts",
-                HttpMethod.POST,
-                entity,
-                String.class);
-        assertThat(blockedResponse.getStatusCode()).isEqualTo(HttpStatus.TOO_MANY_REQUESTS);
-    }
-
-    @Test
-    void shouldHandleDifferentRateLimitTypes() {
-        // Test account creation (daily limit)
-        String ipAddress = "192.168.1.1";
-        HttpHeaders headers = new HttpHeaders();
-        headers.set("X-IP-Address", ipAddress);
-        HttpEntity<String> entity = new HttpEntity<>(null, headers);
-
-        for (int i = 0; i < 10; i++) {
-            ResponseEntity<String> response = restTemplate.exchange(
-                    "/api/accounts",
-                    HttpMethod.POST,
-                    entity,
-                    String.class);
-            assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+        @DynamicPropertySource
+        static void redisProperties(DynamicPropertyRegistry registry) {
+                registry.add("spring.data.redis.host", redis::getHost);
+                registry.add("spring.data.redis.port", () -> redis.getMappedPort(6379));
         }
 
-        // This request should be blocked
-        ResponseEntity<String> blockedResponse = restTemplate.exchange(
-                "/api/accounts",
-                HttpMethod.POST,
-                entity,
-                String.class);
-        assertThat(blockedResponse.getStatusCode()).isEqualTo(HttpStatus.TOO_MANY_REQUESTS);
-    }
+        @Autowired
+        private TestRestTemplate restTemplate;
 
-    @Test
-    void shouldResetRateLimitsAfterExpiration() throws InterruptedException {
-        // Test reward claim (weekly limit)
-        String deviceId = "device-123";
-        HttpHeaders headers = new HttpHeaders();
-        headers.set("X-Device-Id", deviceId);
-        HttpEntity<String> entity = new HttpEntity<>(null, headers);
+        private String baseUrl;
 
-        for (int i = 0; i < 5; i++) {
-            ResponseEntity<String> response = restTemplate.exchange(
-                    "/api/rewards",
-                    HttpMethod.POST,
-                    entity,
-                    String.class);
-            assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+        @BeforeEach
+        void setUp() {
+                baseUrl = "http://localhost:"
+                                + restTemplate.getRestTemplate().getUriTemplateHandler().expand("/").getPort();
         }
 
-        // This request should be blocked
-        ResponseEntity<String> blockedResponse = restTemplate.exchange(
-                "/api/rewards",
-                HttpMethod.POST,
-                entity,
-                String.class);
-        assertThat(blockedResponse.getStatusCode()).isEqualTo(HttpStatus.TOO_MANY_REQUESTS);
+        @Test
+        void whenRateLimitNotExceeded_shouldAllowRequest() {
+                HttpHeaders headers = new HttpHeaders();
+                headers.set("X-User-Id", "user123");
 
-        // Wait for the rate limit to expire (in a real test, you might want to mock the
-        // time)
-        Thread.sleep(7000); // Wait for 7 seconds (for the second-based rate limit)
+                ResponseEntity<String> response = restTemplate.exchange(
+                                baseUrl + "/api/posts",
+                                HttpMethod.POST,
+                                new HttpEntity<>(headers),
+                                String.class);
 
-        // This request should be allowed again
-        HttpHeaders newHeaders = new HttpHeaders();
-        newHeaders.set("X-User-Id", "new-user");
-        HttpEntity<String> newEntity = new HttpEntity<>(null, newHeaders);
-        ResponseEntity<String> allowedResponse = restTemplate.exchange(
-                "/api/posts",
-                HttpMethod.POST,
-                newEntity,
-                String.class);
-        assertThat(allowedResponse.getStatusCode()).isEqualTo(HttpStatus.OK);
-    }
+                assertThat(response.getStatusCode().value()).isEqualTo(200);
+                assertThat(response.getBody()).isEqualTo("Post created successfully");
+        }
+
+        @Test
+        void whenRateLimitExceeded_shouldReturn429() {
+                HttpHeaders headers = new HttpHeaders();
+                headers.set("X-User-Id", "user123");
+
+                // Make requests up to the limit
+                for (int i = 0; i < 5; i++) {
+                        ResponseEntity<String> response = restTemplate.exchange(
+                                        baseUrl + "/api/posts",
+                                        HttpMethod.POST,
+                                        new HttpEntity<>(headers),
+                                        String.class);
+                        assertThat(response.getStatusCode().value()).isEqualTo(200);
+                }
+
+                // Next request should be rate limited
+                ResponseEntity<String> response = restTemplate.exchange(
+                                baseUrl + "/api/posts",
+                                HttpMethod.POST,
+                                new HttpEntity<>(headers),
+                                String.class);
+
+                assertThat(response.getStatusCode().value()).isEqualTo(429);
+                assertThat(response.getBody()).isEqualTo("Rate limit exceeded for second");
+        }
+
+        @Test
+        void whenHeaderMissing_shouldReturn400() {
+                ResponseEntity<String> response = restTemplate.exchange(
+                                baseUrl + "/api/posts",
+                                HttpMethod.POST,
+                                new HttpEntity<>(new HttpHeaders()),
+                                String.class);
+
+                assertThat(response.getStatusCode().value()).isEqualTo(400);
+                assertThat(response.getBody()).isEqualTo("Required header X-User-Id is missing");
+        }
+
+        @Test
+        void whenDifferentEndpoints_shouldHaveDifferentLimits() {
+                // Test posts endpoint (limit: 5 per second)
+                HttpHeaders postHeaders = new HttpHeaders();
+                postHeaders.set("X-User-Id", "user123");
+                for (int i = 0; i < 5; i++) {
+                        ResponseEntity<String> response = restTemplate.exchange(
+                                        baseUrl + "/api/posts",
+                                        HttpMethod.POST,
+                                        new HttpEntity<>(postHeaders),
+                                        String.class);
+                        assertThat(response.getStatusCode().value()).isEqualTo(200);
+                }
+                ResponseEntity<String> response = restTemplate.exchange(
+                                baseUrl + "/api/posts",
+                                HttpMethod.POST,
+                                new HttpEntity<>(postHeaders),
+                                String.class);
+                assertThat(response.getStatusCode().value()).isEqualTo(429);
+
+                // Test accounts endpoint (limit: 3 per day)
+                HttpHeaders accountHeaders = new HttpHeaders();
+                accountHeaders.set("X-IP-Address", "192.168.1.1");
+                for (int i = 0; i < 3; i++) {
+                        response = restTemplate.exchange(
+                                        baseUrl + "/api/accounts",
+                                        HttpMethod.POST,
+                                        new HttpEntity<>(accountHeaders),
+                                        String.class);
+                        assertThat(response.getStatusCode().value()).isEqualTo(200);
+                }
+                response = restTemplate.exchange(
+                                baseUrl + "/api/accounts",
+                                HttpMethod.POST,
+                                new HttpEntity<>(accountHeaders),
+                                String.class);
+                assertThat(response.getStatusCode().value()).isEqualTo(429);
+
+                // Test rewards endpoint (limit: 1 per week)
+                HttpHeaders rewardHeaders = new HttpHeaders();
+                rewardHeaders.set("X-Device-Id", "device123");
+                response = restTemplate.exchange(
+                                baseUrl + "/api/rewards",
+                                HttpMethod.POST,
+                                new HttpEntity<>(rewardHeaders),
+                                String.class);
+                assertThat(response.getStatusCode().value()).isEqualTo(200);
+                response = restTemplate.exchange(
+                                baseUrl + "/api/rewards",
+                                HttpMethod.POST,
+                                new HttpEntity<>(rewardHeaders),
+                                String.class);
+                assertThat(response.getStatusCode().value()).isEqualTo(429);
+        }
 }
